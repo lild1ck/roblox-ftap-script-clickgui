@@ -1,0 +1,360 @@
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+if not player then return end
+local playerGui = player:WaitForChild("PlayerGui")
+
+local old = playerGui:FindFirstChild("ClickGUI")
+if old then old:Destroy() end
+
+local CONFIG = {
+    ToggleKey = Enum.KeyCode.H,
+    Scale = 1.30,
+    Accent = Color3.fromRGB(166, 77, 215),
+    Font = "Gotham",
+    Open = true,
+}
+
+local CATEGORIES = {
+    {name="COMBAT"},
+    {name="MISC"},
+    {name="CLIENT"},
+    {name="RENDER"},
+    {name="MOVEMENT"},
+    {name="PLAYER"},
+    {name="WORLD"},
+    {name="SETTINGS"},
+}
+
+local FONTS = {
+    Gotham=Enum.Font.Gotham,
+    ["Gotham Bold"]=Enum.Font.GothamBold,
+    ["Source Sans"]=Enum.Font.SourceSans,
+    ["Source Sans Bold"]=Enum.Font.SourceSansBold,
+    Arial=Enum.Font.Arial,
+    Code=Enum.Font.Code,
+    SciFi=Enum.Font.SciFi,
+    Arcade=Enum.Font.Arcade,
+}
+local FONT_NAMES = {"Gotham","Gotham Bold","Source Sans","Source Sans Bold","Arial","Code","SciFi","Arcade"}
+local BG = Color3.fromRGB(16, 9, 19)
+local ROW_BG = Color3.fromRGB(17, 11, 19)
+local TEXT = Color3.fromRGB(251, 248, 253)
+local screen = Instance.new("ScreenGui")
+screen.Name = "ClickGUI"
+screen.ResetOnSpawn = false
+screen.IgnoreGuiInset = true
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screen.DisplayOrder = 100
+screen.Enabled = CONFIG.Open
+screen.Parent = playerGui
+
+local canvas = Instance.new("Frame")
+canvas.Name = "Canvas"
+canvas.BackgroundTransparency = 1
+canvas.Size = UDim2.fromScale(1, 1)
+canvas.Parent = screen
+local canvasScale = Instance.new("UIScale")
+canvasScale.Scale = CONFIG.Scale
+canvasScale.Parent = canvas
+
+local columns = {}
+local connections = {}
+local activeDrag = nil
+local advancedPanel = nil
+local refreshPalette
+local refreshFonts
+local updateScale
+
+local function accentBright()
+    return CONFIG.Accent:Lerp(Color3.new(1, 1, 1), 0.16)
+end
+local function accentDark()
+    return CONFIG.Accent:Lerp(Color3.new(0, 0, 0), 0.27)
+end
+local function currentFont(bold)
+    if bold and CONFIG.Font == "Gotham" then return Enum.Font.GothamBold end
+    return FONTS[CONFIG.Font] or Enum.Font.Gotham
+end
+local function make(className, parent, props)
+    local obj = Instance.new(className)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+local function stroke(parent, color, transparency)
+    return make("UIStroke", parent, {Color=color or CONFIG.Accent, Thickness=1.5, Transparency=transparency or 0.05})
+end
+local function txt(parent, text, fontSize, bold)
+    return make("TextLabel", parent, {
+        BackgroundTransparency=1, Text=tostring(text or ""), Font=currentFont(bold),
+        TextSize=fontSize or 12, TextColor3=TEXT, TextXAlignment=Enum.TextXAlignment.Left,
+        TextTruncate=Enum.TextTruncate.None, TextWrapped=false, BorderSizePixel=0,
+    })
+end
+local function btn(parent, text, background)
+    return make("TextButton", parent, {
+        Text=tostring(text or ""), Font=currentFont(false), TextSize=12,
+        TextColor3=TEXT, BackgroundColor3=background or ROW_BG,
+        BorderSizePixel=0, AutoButtonColor=false,
+    })
+end
+local function logicalViewport()
+    local cam = workspace.CurrentCamera
+    local viewport = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    return viewport / math.max(CONFIG.Scale, 0.01)
+end
+local function setScale(percent)
+    CONFIG.Scale = math.clamp((tonumber(percent) or 130) / 100, 0.70, 1.80)
+    canvasScale.Scale = CONFIG.Scale
+    canvas.Size = UDim2.fromScale(1 / CONFIG.Scale, 1 / CONFIG.Scale)
+    if updateScale then updateScale() end
+end
+setScale(130)
+
+local blocker = btn(screen, "", BG)
+blocker.Name = "InputSurface"
+blocker.BackgroundTransparency = 1
+blocker.Size = UDim2.fromScale(1,1)
+blocker.ZIndex = 0
+blocker.Modal = true
+
+local toolbar = make("Frame", canvas, {
+    Name="Toolbar", Size=UDim2.fromOffset(275, 38),
+    Position=UDim2.new(0.5, -137, 1, -50),
+    BackgroundColor3=Color3.fromRGB(24,19,27), BackgroundTransparency=0.24,
+    BorderSizePixel=0, ZIndex=70,
+})
+local toolbarStroke = stroke(toolbar, CONFIG.Accent, 0.55)
+local toolbarTitle = txt(toolbar, "CLICKGUI / H: Toggle", 12, true)
+toolbarTitle.Position=UDim2.fromOffset(10,6)
+toolbarTitle.Size=UDim2.fromOffset(153,26)
+toolbarTitle.ZIndex=71
+local settingsButton=btn(toolbar,"Appearance",accentDark())
+settingsButton.Position=UDim2.fromOffset(165,5)
+settingsButton.Size=UDim2.fromOffset(103,28)
+settingsButton.ZIndex=71
+
+local function fitColumn(column)
+    local headerHeight = 32
+    local view = logicalViewport()
+    if column.collapsed then
+        column.frame.Size=UDim2.fromOffset(column.width,headerHeight)
+        column.scroll.Visible=false
+        return
+    end
+    column.scroll.Visible=true
+    local available=math.max(50,view.Y-column.frame.Position.Y.Offset-headerHeight-8)
+    local height=math.min(175,available)
+    column.frame.Size=UDim2.fromOffset(column.width,height+headerHeight)
+    column.scroll.Position=UDim2.fromOffset(2,headerHeight+1)
+    column.scroll.Size=UDim2.new(1,-4,0,height-2)
+    column.scroll.CanvasSize=UDim2.fromOffset(0,0)
+end
+
+local function buildColumns()
+    local size=logicalViewport()
+    local width=210
+    local gap=10
+    local perRow=math.max(1,math.floor((size.X-18)/(width+gap)))
+    for i, category in ipairs(CATEGORIES) do
+        local x=32+((i-1)%perRow)*(width+gap)
+        local y=8+math.floor((i-1)/perRow)*math.floor(size.Y*0.53)
+        local frame=make("Frame",canvas,{
+            Name=category.name.."_Column",Position=UDim2.fromOffset(x,y),
+            Size=UDim2.fromOffset(width,32),BackgroundColor3=BG,BackgroundTransparency=0.08,
+            BorderSizePixel=0,
+        })
+        local outline=stroke(frame,CONFIG.Accent,0.05)
+        local head=btn(frame,category.name,accentDark())
+        head.Name="DragHeader"
+        head.Size=UDim2.new(1,0,0,32)
+        head.TextSize=15
+        head.Font=currentFont(true)
+        local gradient=make("UIGradient",head,{
+            Color=ColorSequence.new(accentBright(),accentDark()),Rotation=0,
+        })
+        local scroll=make("ScrollingFrame",frame,{
+            Name="Controls",Position=UDim2.fromOffset(2,33),Size=UDim2.new(1,-4,0,0),
+            BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,
+            ScrollBarImageColor3=CONFIG.Accent,ScrollingDirection=Enum.ScrollingDirection.Y,
+            CanvasSize=UDim2.fromOffset(0,0),
+        })
+        local layout=make("UIListLayout",scroll,{
+            Padding=UDim.new(0,0),SortOrder=Enum.SortOrder.LayoutOrder,
+        })
+        local col={name=category.name,frame=frame,head=head,scroll=scroll,
+            layout=layout,width=width,collapsed=false,outline=outline,gradient=gradient}
+        table.insert(columns,col)
+        table.insert(connections,layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            task.defer(function() if frame.Parent then fitColumn(col) end end)
+        end))
+        head.InputBegan:Connect(function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 then
+                activeDrag={col=col,origin=Vector2.new(frame.Position.X.Offset,frame.Position.Y.Offset),
+                    pointer=Vector2.new(input.Position.X,input.Position.Y),moved=false}
+            end
+        end)
+        head.MouseButton1Click:Connect(function()
+            if col.justDragged then col.justDragged=false return end
+            col.collapsed=not col.collapsed
+            head.Text=col.name..(col.collapsed and "  ▶" or "")
+            fitColumn(col)
+        end)
+        task.defer(function() fitColumn(col) end)
+    end
+end
+buildColumns()
+
+advancedPanel=make("Frame",canvas,{
+    Name="AppearanceSettings",Size=UDim2.fromOffset(300,306),
+    Position=UDim2.new(0.5,-150,0.5,-153),
+    BackgroundColor3=Color3.fromRGB(20,12,24),
+    BackgroundTransparency=0.04,BorderSizePixel=0,Visible=false,ZIndex=100,
+})
+local panelStroke=stroke(advancedPanel,CONFIG.Accent,0)
+local panelHeader=btn(advancedPanel,"CLICKGUI / APPEARANCE",accentDark())
+panelHeader.Size=UDim2.new(1,0,0,32)
+panelHeader.ZIndex=101
+panelHeader.Font=currentFont(true)
+local panelClose=btn(advancedPanel,"X",ROW_BG)
+panelClose.Position=UDim2.new(1,-32,0,0)
+panelClose.Size=UDim2.fromOffset(32,32)
+panelClose.ZIndex=102
+panelClose.MouseButton1Click:Connect(function() advancedPanel.Visible=false end)
+local scaleTitle=txt(advancedPanel,"ClickGUI Size (%)",12,true)
+scaleTitle.Position=UDim2.fromOffset(12,47)
+scaleTitle.Size=UDim2.fromOffset(190,22)
+scaleTitle.ZIndex=101
+local scaleValue=txt(advancedPanel,"130",12)
+scaleValue.Position=UDim2.fromOffset(244,47)
+scaleValue.Size=UDim2.fromOffset(44,22)
+scaleValue.ZIndex=101
+local minus=btn(advancedPanel,"-",ROW_BG)
+minus.Position=UDim2.fromOffset(12,72)
+minus.Size=UDim2.fromOffset(50,28)
+minus.ZIndex=101
+local plus=btn(advancedPanel,"+",ROW_BG)
+plus.Position=UDim2.fromOffset(238,72)
+plus.Size=UDim2.fromOffset(50,28)
+plus.ZIndex=101
+local scaleBar=make("Frame",advancedPanel,{
+    Position=UDim2.fromOffset(71,84),Size=UDim2.fromOffset(158,5),
+    BackgroundColor3=Color3.fromRGB(70,35,83),BorderSizePixel=0,ZIndex=101,
+})
+local scaleFill=make("Frame",scaleBar,{
+    Size=UDim2.fromScale(0.5455,1),BackgroundColor3=CONFIG.Accent,
+    BorderSizePixel=0,ZIndex=102,
+})
+updateScale=function()
+    local percent=math.floor(CONFIG.Scale*100+0.5)
+    scaleValue.Text=tostring(percent)
+    scaleFill.Size=UDim2.fromScale((percent-70)/110,1)
+end
+minus.MouseButton1Click:Connect(function()setScale(math.floor(CONFIG.Scale*100)-5)end)
+plus.MouseButton1Click:Connect(function()setScale(math.floor(CONFIG.Scale*100)+5)end)
+local fontTitle=txt(advancedPanel,"ClickGUI Font",12,true)
+fontTitle.Position=UDim2.fromOffset(12,114)
+fontTitle.Size=UDim2.fromOffset(235,22)
+fontTitle.ZIndex=101
+local fontSelect=btn(advancedPanel,"Gotham  ▼",ROW_BG)
+fontSelect.Position=UDim2.fromOffset(12,139)
+fontSelect.Size=UDim2.fromOffset(276,27)
+fontSelect.ZIndex=101
+local fontIndex=1
+refreshFonts=function()
+    for _,node in ipairs(screen:GetDescendants()) do
+        if node:IsA("TextLabel") or node:IsA("TextButton") or node:IsA("TextBox") then
+            node.Font=currentFont(node==panelHeader or node==toolbarTitle or node==fontTitle or node==scaleTitle)
+        end
+    end
+    for _,col in ipairs(columns) do col.head.Font=currentFont(true) end
+    fontSelect.Text=CONFIG.Font.."  ▼"
+end
+fontSelect.MouseButton1Click:Connect(function()
+    fontIndex=fontIndex%#FONT_NAMES+1
+    CONFIG.Font=FONT_NAMES[fontIndex]
+    refreshFonts()
+end)
+local colorTitle=txt(advancedPanel,"ClickGUI Accent (RGB)",12,true)
+colorTitle.Position=UDim2.fromOffset(12,185)
+colorTitle.Size=UDim2.fromOffset(250,22)
+colorTitle.ZIndex=101
+local channels={}
+for i,v in ipairs({math.floor(CONFIG.Accent.R*255),math.floor(CONFIG.Accent.G*255),math.floor(CONFIG.Accent.B*255)}) do
+    local box=make("TextBox",advancedPanel,{
+        Name=({"R","G","B"})[i],Text=tostring(v),ClearTextOnFocus=false,
+        Font=currentFont(false),TextSize=12,TextColor3=TEXT,BackgroundColor3=ROW_BG,
+        BorderSizePixel=0,Position=UDim2.fromOffset(12+(i-1)*95,215),
+        Size=UDim2.fromOffset(87,28),ZIndex=101,
+    })
+    table.insert(channels,box)
+end
+refreshPalette=function()
+    toolbarStroke.Color=CONFIG.Accent
+    panelStroke.Color=CONFIG.Accent
+    settingsButton.BackgroundColor3=accentDark()
+    panelHeader.BackgroundColor3=accentDark()
+    scaleFill.BackgroundColor3=CONFIG.Accent
+    for _,col in ipairs(columns) do
+        col.outline.Color=CONFIG.Accent
+        col.gradient.Color=ColorSequence.new(accentBright(),accentDark())
+        col.scroll.ScrollBarImageColor3=CONFIG.Accent
+    end
+end
+local applyColor=btn(advancedPanel,"APPLY ACCENT",accentDark())
+applyColor.Position=UDim2.fromOffset(12,258)
+applyColor.Size=UDim2.fromOffset(276,30)
+applyColor.ZIndex=101
+applyColor.MouseButton1Click:Connect(function()
+    local values={}
+    for i,box in ipairs(channels) do
+        local n=tonumber(box.Text)
+        if not n then return end
+        values[i]=math.clamp(math.floor(n+0.5),0,255)
+        box.Text=tostring(values[i])
+    end
+    CONFIG.Accent=Color3.fromRGB(values[1],values[2],values[3])
+    refreshPalette()
+end)
+settingsButton.MouseButton1Click:Connect(function() advancedPanel.Visible=not advancedPanel.Visible end)
+table.insert(connections,UIS.InputChanged:Connect(function(input)
+    if activeDrag and input.UserInputType==Enum.UserInputType.MouseMovement then
+        local d=activeDrag
+        local delta=(Vector2.new(input.Position.X,input.Position.Y)-d.pointer)/CONFIG.Scale
+        if delta.Magnitude>4 then d.moved=true end
+        if d.moved then
+            local size=logicalViewport()
+            d.col.frame.Position=UDim2.fromOffset(
+                math.clamp(d.origin.X+delta.X,0,math.max(0,size.X-d.col.width)),
+                math.clamp(d.origin.Y+delta.Y,3,math.max(3,size.Y-35)))
+            fitColumn(d.col)
+        end
+    end
+end))
+table.insert(connections,UIS.InputEnded:Connect(function(input)
+    if input.UserInputType==Enum.UserInputType.MouseButton1 then
+        if activeDrag and activeDrag.moved then activeDrag.col.justDragged=true end
+        activeDrag=nil
+    end
+end))
+table.insert(connections,UIS.InputBegan:Connect(function(input,gameProcessed)
+    if gameProcessed or UIS:GetFocusedTextBox() then return end
+    if input.KeyCode==CONFIG.ToggleKey then
+        screen.Enabled=not screen.Enabled
+    end
+end))
+
+local GUI={ScreenGui=screen, Config=CONFIG, Categories=CATEGORIES}
+function GUI:Show() screen.Enabled=true end
+function GUI:Hide() screen.Enabled=false end
+function GUI:Toggle() screen.Enabled=not screen.Enabled end
+function GUI:SetAccent(color)
+    if typeof(color)=="Color3" then CONFIG.Accent=color refreshPalette() end
+end
+function GUI:Destroy()
+    for _,connection in ipairs(connections) do connection:Disconnect() end
+    screen:Destroy()
+end
+
+return GUI
