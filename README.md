@@ -1,3 +1,8 @@
+         
+Distribution of a Click GUI script for ftap
+
+http://www.floral-village.info/up/1794573482.png
+
  ___       ___  ___               ________  ___  ________  ___  __       
 |\  \     |\  \|\  \             |\   ___ \|\  \|\   ____\|\  \|\  \     
 \ \  \    \ \  \ \  \            \ \  \_|\ \ \  \ \  \___|\ \  \/  /|_   
@@ -8,6 +13,3 @@
                                                                          
                                                                          
                                                                          
-Distribution of a Click GUI script for ftap
-
-http://www.floral-village.info/up/1794573482.png
